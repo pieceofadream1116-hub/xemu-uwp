@@ -114,7 +114,7 @@ jobs:
           pacboy: >-
             toolchain:p glib2:p pixman:p libsamplerate:p zlib:p zstd:p
             meson:p ninja:p pkgconf:p python:p python-yaml:p cmake:p
-            tools-git:p winstorecompat-git:p libslirp:p
+            tools-git:p winstorecompat-git:p libslirp:p libepoxy:p
 
       - name: Build EMU
         shell: msys2 {0}
