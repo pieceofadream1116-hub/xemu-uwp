@@ -28,7 +28,11 @@ if not fs.exists(lib)
     message('Downloading dsp56300 @0@ for @1@...'.format(ver, rust_target))
     run_command(find_program('curl'), '-fsSL', url, '-o', src_archive, check: true)
   endif
-  run_command('tar', 'xzf', src_archive, '-C', meson.current_build_dir(), check: true)
+  # Python unpacks the archive: MSYS2's tar reads a Windows path like
+  # D:/a/... as a remote host and fails.
+  run_command(import('python').find_installation(), '-c',
+              'import sys, tarfile; tarfile.open(sys.argv[1]).extractall(sys.argv[2])',
+              src_archive, meson.current_build_dir(), check: true)
 endif
 
 link_args = []
