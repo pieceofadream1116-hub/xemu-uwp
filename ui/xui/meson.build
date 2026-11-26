@@ -23,6 +23,12 @@ xemu_ss.add(files(
   'widgets.cc',
 ))
 
+# The imgui subproject only builds its Direct3D 12 backend with MSVC; the
+# MSYS2 (GCC) build compiles the same file from here instead.
+if d3d12.found() and meson.get_compiler('cpp').get_argument_syntax() != 'msvc'
+  xemu_ss.add(files('imgui_impl_dx12.cpp'))
+endif
+
 if opengl.found()
   xemu_ss.add(files('gl-helpers.cc'))
 else
