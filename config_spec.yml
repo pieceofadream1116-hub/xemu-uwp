@@ -25,7 +25,7 @@ general:
     background:
       type: enum
       values: ['off', fan_art, screenshot, video, mix_v1, mix_v2]
-      default: fan_art
+      default: 'off'
     media:
       box_front:
         type: bool

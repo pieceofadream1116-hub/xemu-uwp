@@ -1395,6 +1395,61 @@ public:
         }
     }
 
+    // EMU's backdrop: a deep blue gradient with soft lights drifting slowly
+    // across it, like the PS2 app's (XBSX2) menus.
+    void DrawMovingBlue(ImDrawList *dl, ImVec2 display, float alpha,
+                        double now)
+    {
+        auto col = [&](int r, int g, int b, float a) {
+            return IM_COL32(r, g, b, (int)(255 * alpha * a));
+        };
+        dl->AddRectFilledMultiColor(ImVec2(0, 0), display,
+                                    col(12, 30, 78, 1.0f),
+                                    col(8, 22, 62, 1.0f),
+                                    col(2, 7, 24, 1.0f),
+                                    col(4, 12, 36, 1.0f));
+
+        // Each light is a stack of circles that fade toward the edge.
+        struct Light {
+            float period_x, period_y, phase, size, r, g, b;
+        };
+        static const Light lights[] = {
+            { 47.0f, 31.0f, 0.0f, 0.55f, 40, 110, 230 },
+            { 61.0f, 43.0f, 2.1f, 0.45f, 20, 70, 200 },
+            { 37.0f, 53.0f, 4.2f, 0.38f, 70, 140, 255 },
+        };
+        float extent = std::max(display.x, display.y);
+        for (const Light &light : lights) {
+            float t = (float)now;
+            ImVec2 centre(
+                display.x * (0.5f + 0.42f * sinf(t * kTau / light.period_x +
+                                                 light.phase)),
+                display.y * (0.5f + 0.38f * cosf(t * kTau / light.period_y +
+                                                 light.phase * 1.3f)));
+            float radius = extent * light.size;
+            const int rings = 14;
+            for (int i = rings; i >= 1; i--) {
+                float f = (float)i / rings;
+                dl->AddCircleFilled(centre, radius * f,
+                                    col((int)light.r, (int)light.g,
+                                        (int)light.b, 0.022f),
+                                    48);
+            }
+        }
+
+        // A faint band of light sweeping across now and then.
+        float sweep = fmodf((float)now / 14.0f, 1.0f);
+        float x = -display.x * 0.4f + sweep * display.x * 1.8f;
+        float width = display.x * 0.18f;
+        ImU32 clear = col(120, 170, 255, 0.0f);
+        ImU32 glow = col(120, 170, 255, 0.05f);
+        dl->AddRectFilledMultiColor(ImVec2(x, 0), ImVec2(x + width, display.y),
+                                    clear, glow, glow, clear);
+        dl->AddRectFilledMultiColor(ImVec2(x + width, 0),
+                                    ImVec2(x + width * 2, display.y), glow,
+                                    clear, clear, glow);
+    }
+
     void DrawBackground(ImDrawList *dl, ImVec2 display, float alpha,
                         double now)
     {
@@ -1402,11 +1457,7 @@ public:
         bool contain = style == ss::kBackgroundMixV1 ||
                        style == ss::kBackgroundMixV2;
 
-        dl->AddRectFilledMultiColor(ImVec2(0, 0), display,
-                                    IM_COL32(20, 26, 36, (int)(255 * alpha)),
-                                    IM_COL32(20, 26, 36, (int)(255 * alpha)),
-                                    IM_COL32(6, 8, 12, (int)(255 * alpha)),
-                                    IM_COL32(6, 8, 12, (int)(255 * alpha)));
+        DrawMovingBlue(dl, display, alpha, now);
         if (style == ss::kBackgroundOff) {
             return;
         }

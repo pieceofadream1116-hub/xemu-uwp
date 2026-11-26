@@ -711,7 +711,8 @@ static bool media_url_is_safe(const std::string &url)
     int port = g_uri_get_port(uri);
     std::string host = host_value != nullptr ? lowercase(host_value) : "";
     bool host_allowed = host == "thumbnails.libretro.com" ||
-                        host == "en.wikipedia.org";
+                        host == "en.wikipedia.org" ||
+                        host == "api.github.com";
     bool safe = scheme != nullptr &&
                 g_ascii_strcasecmp(scheme, "https") == 0 && host_allowed &&
                 (port == -1 || port == 443);
@@ -1928,6 +1929,146 @@ static std::string wikipedia_synopsis(const std::string &title)
     return json_extract_text(body);
 }
 
+/* Letters and digits of the clean title, lower case: names spelled a little
+ * differently ("Halo: Combat Evolved", "Halo - Combat Evolved (USA)") match. */
+static std::string match_key(const std::string &title)
+{
+    std::string key;
+    for (unsigned char ch : clean_title(title)) {
+        if (g_ascii_isalnum(ch)) {
+            key.push_back((char)g_ascii_tolower(ch));
+        }
+    }
+    return key;
+}
+
+/* Lower is better: which version of a game's picture to use */
+static int name_region_rank(const std::string &name)
+{
+    auto has = [&](const char *text) {
+        return name.find(text) != std::string::npos;
+    };
+    int rank = 50;
+    if (has("(USA)")) {
+        rank = 0;
+    } else if (has("(USA, Europe)")) {
+        rank = 1;
+    } else if (has("(World)")) {
+        rank = 2;
+    } else if (has("USA")) {
+        rank = 3;
+    } else if (has("(Europe)")) {
+        rank = 10;
+    } else if (has("(Japan)")) {
+        rank = 20;
+    }
+    if (has("Beta") || has("Proto") || has("Demo") || has("Kiosk")) {
+        rank += 100;
+    }
+    if (has("(Rev") || has("(v1.")) {
+        rank += 1;
+    }
+    return rank;
+}
+
+/*
+ * Every picture name in Libretro's Xbox library ("Named_Boxarts/Halo -
+ * Combat Evolved (USA).png"...), from one GitHub request, kept for a week in
+ * the cache folder. Matching against it finds pictures whose names differ
+ * from the game file's.
+ */
+static std::vector<std::string> libretro_index(const std::string &cache_root)
+{
+    static std::mutex lock;
+    static std::vector<std::string> names;
+    static gint64 loaded_at = 0;
+    std::lock_guard<std::mutex> guard(lock);
+    gint64 now = g_get_real_time();
+    if (!names.empty() && now - loaded_at < G_GINT64_CONSTANT(86400000000)) {
+        return names;
+    }
+
+    std::string file = path_to_utf8(std::filesystem::path(cache_root) /
+                                    "libretro-xbox-pictures.txt");
+    GStatBuf stat = {};
+    std::string text;
+    bool fresh = g_stat(file.c_str(), &stat) == 0 &&
+                 (gint64)stat.st_mtime * G_USEC_PER_SEC >
+                     now - G_GINT64_CONSTANT(7) * 86400 * G_USEC_PER_SEC;
+    if (!fresh || !read_file_limited(file, kMaxResponseBytes, &text)) {
+        std::vector<uint8_t> body;
+        int status = -1;
+        if (!download_url_to_memory(
+                "https://api.github.com/repos/libretro-thumbnails/"
+                "Microsoft_-_Xbox/git/trees/master?recursive=1",
+                kMaxResponseBytes, &body, &status)) {
+            /* Keep using an old list rather than none */
+            if (!read_file_limited(file, kMaxResponseBytes, &text)) {
+                return {};
+            }
+        } else {
+            text.clear();
+            try {
+                json root = json::parse(body.begin(), body.end());
+                for (const json &item : root.at("tree")) {
+                    std::string path = member_string(item, "path");
+                    if (path.size() > 4 &&
+                        path.compare(path.size() - 4, 4, ".png") == 0) {
+                        text += path.substr(0, path.size() - 4);
+                        text += '\n';
+                    }
+                }
+            } catch (const json::exception &) {
+                return {};
+            }
+            write_file_atomic(file, text.data(), text.size());
+        }
+    }
+    names.clear();
+    size_t start = 0;
+    while (start < text.size()) {
+        size_t end = text.find('\n', start);
+        if (end == std::string::npos) {
+            end = text.size();
+        }
+        if (end > start) {
+            names.push_back(text.substr(start, end - start));
+        }
+        start = end + 1;
+    }
+    loaded_at = now;
+    return names;
+}
+
+/* The library's names for this game in one folder (Named_Boxarts...), best
+ * region first. */
+static std::vector<std::string> index_matches(
+    const std::vector<std::string> &index, const char *folder,
+    const std::vector<std::string> &keys)
+{
+    std::string prefix = std::string(folder) + "/";
+    std::vector<std::pair<int, std::string>> found;
+    for (const std::string &entry : index) {
+        if (entry.compare(0, prefix.size(), prefix) != 0) {
+            continue;
+        }
+        std::string name = entry.substr(prefix.size());
+        std::string key = match_key(name);
+        for (const std::string &wanted : keys) {
+            if (!wanted.empty() && key == wanted) {
+                found.emplace_back(name_region_rank(name), name);
+                break;
+            }
+        }
+    }
+    std::sort(found.begin(), found.end());
+    std::vector<std::string> names;
+    for (auto &item : found) {
+        names.push_back(std::move(item.second));
+    }
+    return names;
+}
+
 static bool fetch_impl(const std::string &cache_root, const Request &request,
                        const SettingsSnapshot &settings, Metadata *metadata)
 {
@@ -1989,11 +2130,23 @@ static bool fetch_impl(const std::string &cache_root, const Request &request,
         { "Named_Titles", "fanart" },
     };
 
+    std::vector<std::string> index = libretro_index(cache_root);
+    std::vector<std::string> keys{ match_key(stem), match_key(result.name),
+                                   match_key(request.xbe_name) };
+
     json downloaded_media = json::array();
     bool complete = true;
     for (const Kind &kind : kinds) {
         bool found = false;
-        for (const std::string &name : names) {
+        /* With the library's list, only names it really has are tried */
+        std::vector<std::string> tries = names;
+        if (!index.empty()) {
+            tries = index_matches(index, kind.folder, keys);
+            if (tries.size() > 3) {
+                tries.resize(3);
+            }
+        }
+        for (const std::string &name : tries) {
             MediaCandidate media;
             media.type = kind.type;
             media.region = "us";

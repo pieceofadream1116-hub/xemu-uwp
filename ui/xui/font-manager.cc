@@ -112,7 +112,10 @@ void FontManager::Rebuild(FontRendererBackend backend)
         break;
     case FontRendererBackend::D3D12:
 #if defined(CONFIG_D3D12) && defined(_WIN32)
-        ImGui_ImplDX12_RebuildFontsTexture();
+        // The font atlas lives in the DX12 backend's device objects; making
+        // them again uploads the newly sized fonts.
+        ImGui_ImplDX12_InvalidateDeviceObjects();
+        ImGui_ImplDX12_CreateDeviceObjects();
 #endif
         break;
     }
