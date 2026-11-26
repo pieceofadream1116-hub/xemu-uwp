@@ -1895,8 +1895,8 @@ static std::string json_extract_text(const std::vector<uint8_t> &body)
     try {
         json root = json::parse(body.begin(), body.end());
         const json &pages = root.at("query").at("pages");
-        for (const auto &[id, page] : pages.items()) {
-            (void)id;
+        for (auto it = pages.begin(); it != pages.end(); ++it) {
+            const json &page = it.value();
             std::string text = member_string(page, "extract");
             for (char &ch : text) {
                 if (ch == '\n' || ch == '\r') {
