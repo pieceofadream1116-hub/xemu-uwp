@@ -33,6 +33,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Pick Visual Studio
+        id: vs
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          & $vswhere -products * -format text -property displayName
+          $has2026 = [bool](& $vswhere -products * -version '[18.0,19.0)' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath)
+          $cmake2026 = [bool]((cmake --help) -match 'Visual Studio 18 2026')
+          $generator = if ($has2026 -and $cmake2026) { 'Visual Studio 18 2026' } else { 'Visual Studio 17 2022' }
+          Write-Host "Generator: $generator"
+          "generator=$generator" >> $env:GITHUB_OUTPUT
+
       - name: Compute version
         id: version
         shell: pwsh
@@ -51,7 +63,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: out/uwp-deps
-          key: sdl3-uwp-emu-${{ env.SDL3_UWP_COMMIT }}
+          key: sdl3-uwp-emu-${{ env.SDL3_UWP_COMMIT }}-${{ steps.vs.outputs.generator }}
 
       - name: Build SDL3-uwp
         shell: pwsh
@@ -62,7 +74,7 @@ jobs:
           git -C out/SDL3-uwp fetch --depth 1 origin $env:SDL3_UWP_COMMIT
           if ($LASTEXITCODE -ne 0) { throw 'Could not download SDL3-uwp' }
           git -C out/SDL3-uwp checkout FETCH_HEAD
-          cmake -S out/SDL3-uwp -B out/SDL3-build -G "Visual Studio 17 2022" -A x64 `
+          cmake -S out/SDL3-uwp -B out/SDL3-build -G "${{ steps.vs.outputs.generator }}" -A x64 `
             "-DCMAKE_SYSTEM_NAME=WindowsStore" "-DCMAKE_SYSTEM_VERSION=10.0" "-DCMAKE_INSTALL_PREFIX=$PWD/out/uwp-deps" `
             -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST_LIBRARY=OFF -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF
           if ($LASTEXITCODE -ne 0) { throw 'SDL3-uwp configure failed' }
