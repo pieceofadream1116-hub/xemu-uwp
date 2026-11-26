@@ -271,7 +271,7 @@ void MainMenuGeneralView::Draw()
 
         // The download runs on library workers; this only polls progress.
         static bool download_needs_credentials = false;
-        bool have_credentials = !username.empty() && password_saved;
+        bool have_credentials = true; // the free library needs no account
         XemuGameLibraryDownloadStatus download;
         xemu_game_library_download_status(&download);
         ImGui::BeginDisabled(download.running);
