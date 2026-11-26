@@ -999,6 +999,18 @@ void xemu_input_update_controller(ControllerState *state)
 #endif
     }
 
+    /* Turbo: a held button marked for turbo is let go every other 50 ms
+     * (about 10 presses a second). */
+    uint32_t turbo = (g_config.input.turbo.a ? CONTROLLER_BUTTON_A : 0) |
+                     (g_config.input.turbo.b ? CONTROLLER_BUTTON_B : 0) |
+                     (g_config.input.turbo.x ? CONTROLLER_BUTTON_X : 0) |
+                     (g_config.input.turbo.y ? CONTROLLER_BUTTON_Y : 0) |
+                     (g_config.input.turbo.white ? CONTROLLER_BUTTON_WHITE : 0) |
+                     (g_config.input.turbo.black ? CONTROLLER_BUTTON_BLACK : 0);
+    if (turbo != 0 && ((now / 50000) & 1) != 0) {
+        state->buttons &= ~turbo;
+    }
+
     state->last_input_updated_ts = qemu_clock_get_us(QEMU_CLOCK_REALTIME);
 }
 

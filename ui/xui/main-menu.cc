@@ -125,104 +125,10 @@ void MainMenuGeneralView::Draw()
 #endif
 
 #ifdef CONFIG_UWP
-    SectionTitle("ScreenScraper");
-
-    static constexpr const char *kScreenScraperVaultResource =
-        "xemu/screenscraper";
-    static bool credentials_initialized = false;
-    static bool password_saved = false;
-    static std::string username;
-    static std::string password;
-    static std::string credential_status;
-
-    if (!credentials_initialized) {
-        username = g_config.general.screenscraper.username
-            ? g_config.general.screenscraper.username
-            : "";
-        char *error = nullptr;
-        password_saved = !username.empty() && xemu_uwp_password_vault_has(
-            kScreenScraperVaultResource, username.c_str(), &error);
-        if (error != nullptr) {
-            credential_status = error;
-            g_free(error);
-        }
-        credentials_initialized = true;
-    }
-
-    ImGui::TextUnformatted("Username");
-    ImGui::SetNextItemWidth(-FLT_MIN);
-    if (ImGui::InputTextWithHint("##screenscraper_username",
-                                 "ScreenScraper username", &username)) {
-        xemu_settings_set_string(&g_config.general.screenscraper.username,
-                                 username.c_str());
-        password_saved = false;
-        credential_status.clear();
-    }
-    TextFieldActivateWithA();
-    if (ImGui::IsItemDeactivatedAfterEdit()) {
-        char *error = nullptr;
-        password_saved = !username.empty() && xemu_uwp_password_vault_has(
-            kScreenScraperVaultResource, username.c_str(), &error);
-        if (error != nullptr) {
-            credential_status = error;
-        }
-        g_free(error);
-        xemu_game_library_screenscraper_settings_changed();
-    }
-
-    ImGui::TextUnformatted("Password");
-    ImGui::SetNextItemWidth(-FLT_MIN);
-    ImGui::InputTextWithHint(
-        "##screenscraper_password",
-        password_saved ? "Saved in Windows Password Vault"
-                       : "ScreenScraper password",
-        &password, ImGuiInputTextFlags_Password);
-    TextFieldActivateWithA();
-
-    bool can_save = !username.empty() && !password.empty();
-    ImGui::BeginDisabled(!can_save);
-    if (ImGui::Button("Save credentials")) {
-        char *error = nullptr;
-        if (xemu_uwp_password_vault_store(kScreenScraperVaultResource,
-                                          username.c_str(),
-                                          password.c_str(), &error)) {
-            password_saved = true;
-            credential_status = "Password saved in Windows Password Vault";
-            std::fill(password.begin(), password.end(), '\0');
-            password.clear();
-            xemu_game_library_screenscraper_settings_changed();
-        } else if (error != nullptr) {
-            credential_status = error;
-        }
-        g_free(error);
-    }
-    ImGui::EndDisabled();
-
-    if (password_saved) {
-        ImGui::SameLine();
-        if (ImGui::Button("Remove saved password")) {
-            char *error = nullptr;
-            if (xemu_uwp_password_vault_remove(kScreenScraperVaultResource,
-                                               username.c_str(),
-                                               &error)) {
-                password_saved = false;
-                credential_status = "Saved password removed";
-                xemu_game_library_screenscraper_settings_changed();
-            } else if (error != nullptr) {
-                credential_status = error;
-            }
-            g_free(error);
-        }
-    }
-
-    if (username.empty() || !password_saved) {
-        ImGui::TextWrapped("Artwork and game details are only downloaded "
-                           "with your own ScreenScraper account.");
-    }
-
-    if (!credential_status.empty()) {
-        ImGui::TextWrapped("%s", credential_status.c_str());
-    }
+    SectionTitle("Box art and game details");
+    ImGui::TextWrapped("Box art, screenshots and title screens come from the "
+                       "free Libretro library, and game descriptions from "
+                       "Wikipedia. No account is needed.");
 
     {
         static std::string media_dir_display;
@@ -962,6 +868,16 @@ void MainMenuInputView::Draw()
         if (can_reset_mapping && ImGui::Button("Reset to Default")) {
             xemu_input_reset_input_mapping(bound_state);
         }
+
+        SectionTitle("Turbo");
+        ImGui::TextWrapped("A turbo button fires by itself while you hold "
+                           "it (all controllers).");
+        Toggle("Turbo A", &g_config.input.turbo.a);
+        Toggle("Turbo B", &g_config.input.turbo.b);
+        Toggle("Turbo X", &g_config.input.turbo.x);
+        Toggle("Turbo Y", &g_config.input.turbo.y);
+        Toggle("Turbo White", &g_config.input.turbo.white);
+        Toggle("Turbo Black", &g_config.input.turbo.black);
 
         ImGui::PopStyleColor();
         ImGui::PopID();
