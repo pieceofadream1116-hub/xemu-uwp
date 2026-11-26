@@ -207,9 +207,23 @@ bool xemu_settings_load(void)
     /* Xbox: default the game library to the USB storage layout
      * (E:\Games\<system>). */
     if (g_config.general.games_dir == NULL ||
-        g_config.general.games_dir[0] == '\0') {
+        g_config.general.games_dir[0] == '\0' ||
+        strcmp(g_config.general.games_dir, XEMU_UWP_DEFAULT_GAMES_DIR) == 0) {
+        /* ES-DE's Xbox folder on any drive comes first:
+         * <drive>:\ES-DE\ROMs\xbox, or <drive>:\ROMs\xbox */
+        const char *found = NULL;
+        static char esde[64];
+        for (char drive = 'D'; drive <= 'Z' && found == NULL; drive++) {
+            for (const char *top : { "ES-DE\\ROMs", "ROMs" }) {
+                snprintf(esde, sizeof(esde), "%c:\\%s\\xbox", drive, top);
+                if (g_file_test(esde, G_FILE_TEST_IS_DIR)) {
+                    found = esde;
+                    break;
+                }
+            }
+        }
         xemu_settings_set_string(&g_config.general.games_dir,
-                                 XEMU_UWP_DEFAULT_GAMES_DIR);
+                                 found ? found : XEMU_UWP_DEFAULT_GAMES_DIR);
     }
     /* Best effort: the USB drive may not be attached yet. */
     g_mkdir_with_parents(g_config.general.games_dir, 0755);
