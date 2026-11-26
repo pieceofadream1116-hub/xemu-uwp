@@ -10,8 +10,8 @@
     Version="@VERSION@"
     ProcessorArchitecture="@PROCESSOR_ARCHITECTURE@" />
   <Properties>
-    <DisplayName>xemu</DisplayName>
-    <PublisherDisplayName>DanP142</PublisherDisplayName>
+    <DisplayName>EMU</DisplayName>
+    <PublisherDisplayName>Piece of a Dream</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
   <Dependencies>
@@ -31,9 +31,9 @@
                  Executable="xemu.exe"
                  EntryPoint="@ENTRY_POINT@">
       <uap:VisualElements
-        DisplayName="xemu"
-        Description="xemu"
-        BackgroundColor="#202020"
+        DisplayName="EMU"
+        Description="EMU, an original Xbox emulator made from xemu"
+        BackgroundColor="#0a1a3a"
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png">
         <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />

@@ -3882,17 +3882,7 @@ xemu_config = custom_target('xemu-config.h',
                             command : [python, genconfig_proj.get_variable('gen_config_script_path'), '@INPUT@', '@OUTPUT@'],
                             )
 
-if is_uwp
-  screenscraper_build_secrets = custom_target(
-    'screenscraper-build-secrets.h',
-    output: 'screenscraper-build-secrets.h',
-    input: files('scripts/generate-screenscraper-build-secrets.py'),
-    command: [python, '@INPUT@', '@OUTPUT@'],
-    build_by_default: true,
-    build_always_stale: true,
-  )
-  genh += screenscraper_build_secrets
-endif
+# EMU fork: no ScreenScraper build secrets (artwork comes from Libretro thumbnails)
 
 genh += qemu_version
 genh += xemu_version

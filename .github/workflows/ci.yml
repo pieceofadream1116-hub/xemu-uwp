@@ -5,6 +5,8 @@ on:
   push:
     branches-ignore:
       - master
+      - 'emu/**'
+      - uwp-d3d12
     tags-ignore:
       - "v*"
 

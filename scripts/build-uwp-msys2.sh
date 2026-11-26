@@ -25,13 +25,11 @@ if test "${MSYSTEM:-}" != "UCRT64"; then
 fi
 
 if ! command -v python3 >/dev/null 2>&1; then
-    echo "python3 is required to prepare ScreenScraper build credentials." >&2
+    echo "python3 is required by the xemu build." >&2
     exit 1
 fi
 
 mkdir -p "${build_dir}"
-python3 "${project_source_dir}/scripts/generate-screenscraper-build-secrets.py" \
-    "${build_dir}/screenscraper-build-secrets.h"
 
 if ! test -f /ucrt64/lib/libwindowsapp.a && ! test -f /mingw64/lib/libwindowsapp.a; then
     echo "libwindowsapp.a not found. Install the MSYS2 MinGW-w64 CRT package." >&2

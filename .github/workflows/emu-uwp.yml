@@ -1,0 +1,195 @@
+# Builds EMU, the Xbox (UWP) app made from xemu, and publishes the install files.
+#
+# Every push to emu/main replaces the "latest" release, so the files are always at the same links (no zip):
+#   releases/download/latest/EMU.msix   the app
+#   releases/download/latest/Microsoft.VCLibs.x64.14.00.appx   its dependency (add it next to the app)
+#   releases/download/latest/EMU.cer    the test certificate (for installing on a Windows PC)
+name: EMU (Xbox)
+
+on:
+  push:
+    branches: ['emu/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: emu-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SDL3_UWP_REPO: https://github.com/SternXD/SDL3-uwp.git
+  SDL3_UWP_COMMIT: ddd5d4f99a26ac95d4620ccf489c07fcf5f08636
+
+jobs:
+  build:
+    name: Build EMU (x64)
+    runs-on: windows-2025
+    timeout-minutes: 240
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute version
+        id: version
+        shell: pwsh
+        run: |
+          $version = "1.0.$env:GITHUB_RUN_NUMBER.0"
+          Write-Host "Package version: $version"
+          "version=$version" >> $env:GITHUB_OUTPUT
+          $sdk = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Directory |
+            Where-Object { $_.Name -match '^10\.' -and (Test-Path (Join-Path $_.FullName 'x64\makeappx.exe')) } |
+            Sort-Object { [version]$_.Name } | Select-Object -Last 1
+          if (!$sdk) { throw 'No Windows SDK found' }
+          Write-Host "Windows SDK: $($sdk.Name)"
+          "sdk=$($sdk.Name)" >> $env:GITHUB_OUTPUT
+
+      - name: Cache SDL3-uwp
+        uses: actions/cache@v4
+        with:
+          path: out/uwp-deps
+          key: sdl3-uwp-emu-${{ env.SDL3_UWP_COMMIT }}
+
+      - name: Build SDL3-uwp
+        shell: pwsh
+        run: |
+          if (Test-Path out/uwp-deps/bin/SDL3.dll) { Write-Host 'SDL3-uwp restored from cache'; exit 0 }
+          git init out/SDL3-uwp
+          git -C out/SDL3-uwp remote add origin $env:SDL3_UWP_REPO
+          git -C out/SDL3-uwp fetch --depth 1 origin $env:SDL3_UWP_COMMIT
+          if ($LASTEXITCODE -ne 0) { throw 'Could not download SDL3-uwp' }
+          git -C out/SDL3-uwp checkout FETCH_HEAD
+          cmake -S out/SDL3-uwp -B out/SDL3-build -G "Visual Studio 17 2022" -A x64 `
+            "-DCMAKE_SYSTEM_NAME=WindowsStore" "-DCMAKE_SYSTEM_VERSION=10.0" "-DCMAKE_INSTALL_PREFIX=$PWD/out/uwp-deps" `
+            -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST_LIBRARY=OFF -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF
+          if ($LASTEXITCODE -ne 0) { throw 'SDL3-uwp configure failed' }
+          cmake --build out/SDL3-build --config Release --target install -- /m /v:minimal
+          if ($LASTEXITCODE -ne 0) { throw 'SDL3-uwp build failed' }
+
+      - name: Make sure SDL3-uwp has a pkg-config file
+        shell: pwsh
+        run: |
+          $pc = 'out/uwp-deps/lib/pkgconfig/sdl3.pc'
+          Get-ChildItem -Recurse out/uwp-deps -Include *.pc,*.dll,*.lib | ForEach-Object { $_.FullName }
+          if (Test-Path $pc) { Get-Content $pc; exit 0 }
+          New-Item -ItemType Directory -Force -Path (Split-Path $pc) | Out-Null
+          $prefix = (Resolve-Path out/uwp-deps).Path.Replace('\', '/')
+          @"
+          prefix=$prefix
+          exec_prefix=`${prefix}
+          libdir=`${prefix}/lib
+          includedir=`${prefix}/include
+
+          Name: sdl3
+          Description: SDL3 for UWP
+          Version: 3.2.0
+          Libs: -L`${libdir} -lSDL3
+          Cflags: -I`${includedir}
+          "@ -split "`n" | ForEach-Object { $_.TrimStart() } | Set-Content -Encoding ascii $pc
+          Get-Content $pc
+
+      - name: Set up MSYS2 (UCRT64)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          release: false
+          update: false
+          install: >-
+            base-devel git make bison flex diffutils
+          pacboy: >-
+            toolchain:p glib2:p pixman:p libsamplerate:p zlib:p zstd:p
+            meson:p ninja:p pkgconf:p python:p python-yaml:p cmake:p
+            tools-git:p winstorecompat-git:p libslirp:p
+
+      - name: Build EMU
+        shell: msys2 {0}
+        env:
+          XEMU_SDL3_UWP_DIR: ${{ github.workspace }}\out\uwp-deps
+          JOBS: 4
+        run: |
+          gcc --version
+          ./scripts/build-uwp-msys2.sh
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: emu-build-log-${{ steps.version.outputs.version }}
+          path: |
+            build-uwp-msys2/build.log
+            build-uwp-msys2/meson-logs/meson-log.txt
+          if-no-files-found: ignore
+
+      - name: Find the test certificate
+        id: cert
+        shell: pwsh
+        run: |
+          $cmakeRoot = Split-Path -Parent (Split-Path -Parent (Get-Command cmake).Source)
+          $pfx = Get-ChildItem $cmakeRoot -Recurse -Filter Windows_TemporaryKey.pfx | Select-Object -First 1
+          if (!$pfx) { throw 'CMake test certificate not found' }
+          $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($pfx.FullName, '')
+          Write-Host "Certificate: $($cert.Subject)"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          [System.IO.File]::WriteAllBytes("$PWD\dist\EMU.cer", $cert.Export('Cert'))
+          "pfx=$($pfx.FullName)" >> $env:GITHUB_OUTPUT
+          "subject=$($cert.Subject)" >> $env:GITHUB_OUTPUT
+
+      - name: Package EMU
+        shell: pwsh
+        run: |
+          ./scripts/package-uwp-msys2.ps1 `
+            -PackageName 'PieceOfADream.EMU' `
+            -Publisher '${{ steps.cert.outputs.subject }}' `
+            -Version '${{ steps.version.outputs.version }}' `
+            -SdkVersion '${{ steps.version.outputs.sdk }}' `
+            -MsysRoot 'C:\msys64' `
+            -CertPath '${{ steps.cert.outputs.pfx }}'
+          if ($LASTEXITCODE -ne 0) { throw 'Packaging failed' }
+
+      - name: Collect install files
+        shell: pwsh
+        run: |
+          $msix = Get-ChildItem dist-uwp-msys2 -Filter *.msix | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (!$msix) { throw 'No .msix was made' }
+          Copy-Item $msix.FullName dist/EMU.msix
+          $vclibs = Get-ChildItem "${env:ProgramFiles(x86)}\Microsoft SDKs\Windows Kits\10\ExtensionSDKs\Microsoft.VCLibs" -Recurse -Filter 'Microsoft.VCLibs.x64.14.00.appx' |
+            Where-Object { $_.FullName -match 'Retail' } | Select-Object -First 1
+          if ($vclibs) { Copy-Item $vclibs.FullName dist/ } else { Write-Warning 'Microsoft.VCLibs .appx not found' }
+          Get-ChildItem dist
+
+      - name: Upload install files
+        uses: actions/upload-artifact@v4
+        with:
+          name: emu-${{ steps.version.outputs.version }}
+          path: dist/*
+          compression-level: 0
+
+  latest:
+    name: Publish latest build
+    if: github.ref == 'refs/heads/emu/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download install files
+        uses: actions/download-artifact@v4
+        with:
+          name: emu-${{ needs.build.outputs.version }}
+          path: dist
+
+      - name: Replace the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          ls -la dist
+          notes="EMU for Xbox, version $VERSION. An original Xbox emulator made from xemu (https://github.com/xemu-project/xemu), GPL v2.
+          On the Xbox Device Portal, add EMU.msix, and add the Microsoft.VCLibs .appx file as its dependency.
+          Box art comes from the free Libretro thumbnails library, and game descriptions from Wikipedia."
+          gh release delete latest --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+          gh release create latest dist/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "EMU (latest build $VERSION)" --notes "$notes"

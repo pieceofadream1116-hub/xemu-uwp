@@ -1051,6 +1051,7 @@ xemu::screenscraper::Request GameLibrary::request_for_title_locked(
         if (entry.title_id == requested) {
             request.rom_filename = path_to_utf8(
                 std::filesystem::path(entry.path).filename());
+            request.xbe_name = entry.xbe_name;
             request.rom_size = entry.size;
             return request;
         }

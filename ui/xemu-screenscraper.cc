@@ -1,5 +1,11 @@
 /*
- * ScreenScraper API v2 provider and local metadata/media cache.
+ * Game library artwork provider and local metadata/media cache.
+ *
+ * EMU fork: box art, screenshots and title screens come from the Libretro
+ * thumbnails library (thumbnails.libretro.com) and the synopsis from
+ * Wikipedia. Neither needs an account or key. The ScreenScraper code paths are
+ * kept below but no longer used (they need a developer login).
+ *
  *
  * Source URLs returned by ScreenScraper contain credentials. They exist only
  * in worker-local memory long enough to download a media object; cache files
@@ -12,9 +18,8 @@
 
 #include "ui/xemu-settings.h"
 
-#if defined(CONFIG_UWP) || defined(XEMU_UWP)
-#include "screenscraper-build-secrets.h"
-#endif
+/* EMU (Frank's fork): artwork comes from the free Libretro thumbnails library and
+ * descriptions from Wikipedia, so no ScreenScraper developer login is needed. */
 
 #ifdef XEMU_UWP
 #include "ui/uwp-password-vault.h"
@@ -507,8 +512,7 @@ static bool parse_manifest(const std::string &media_root,
     try {
         json root_json = json::parse(contents);
         if (!root_json.is_object() ||
-            root_json.value("provider", std::string()) != "screenscraper" ||
-            root_json.value("system_id", 0) != kXboxSystemId ||
+            root_json.value("provider", std::string()) != "libretro" ||
             root_json.value("title_id", (uint32_t)0) != request.title_id ||
             root_json.value("serial", std::string()) !=
                 serial_for_title(request.title_id)) {
@@ -706,9 +710,8 @@ static bool media_url_is_safe(const std::string &url)
     const char *host_value = g_uri_get_host(uri);
     int port = g_uri_get_port(uri);
     std::string host = host_value != nullptr ? lowercase(host_value) : "";
-    bool host_allowed = host == "screenscraper.fr" ||
-                        (host.size() > strlen(".screenscraper.fr") &&
-                         g_str_has_suffix(host.c_str(), ".screenscraper.fr"));
+    bool host_allowed = host == "thumbnails.libretro.com" ||
+                        host == "en.wikipedia.org";
     bool safe = scheme != nullptr &&
                 g_ascii_strcasecmp(scheme, "https") == 0 && host_allowed &&
                 (port == -1 || port == 443);
@@ -1015,6 +1018,9 @@ static bool download_url_to_memory(const std::string &url, gsize max_size,
         winrt::Windows::Web::Http::Filters::HttpBaseProtocolFilter filter;
         filter.AllowAutoRedirect(false);
         winrt::Windows::Web::Http::HttpClient client(filter);
+        /* Wikipedia refuses requests that do not say which app is asking */
+        client.DefaultRequestHeaders().UserAgent().TryParseAdd(
+            L"EMU/1.0 (Xbox UWP original Xbox emulator; github.com/pieceofadream1116-hub/xemu-uwp)");
         AsyncDeadline overall = AsyncClock::now() + kApiOverallTimeout;
         auto get_operation = client.GetAsync(
             winrt::Windows::Foundation::Uri(winrt::to_hstring(url)),
@@ -1116,6 +1122,9 @@ static bool download_media_to_file(const MediaCandidate &media,
         winrt::Windows::Web::Http::Filters::HttpBaseProtocolFilter filter;
         filter.AllowAutoRedirect(false);
         winrt::Windows::Web::Http::HttpClient client(filter);
+        /* Wikipedia refuses requests that do not say which app is asking */
+        client.DefaultRequestHeaders().UserAgent().TryParseAdd(
+            L"EMU/1.0 (Xbox UWP original Xbox emulator; github.com/pieceofadream1116-hub/xemu-uwp)");
         AsyncDeadline overall = media_overall_deadline(media);
         auto get_operation = client.GetAsync(
             winrt::Windows::Foundation::Uri(winrt::to_hstring(media.url)),
@@ -1226,53 +1235,11 @@ static bool build_api_url(const Request &request,
                           const SettingsSnapshot &settings,
                           std::string *url)
 {
-#if defined(CONFIG_UWP) || defined(XEMU_UWP)
-    const std::string &personal_username = settings.username;
-    std::string personal_password;
-#ifdef XEMU_UWP
-    if (!personal_username.empty()) {
-        char *vault_error = nullptr;
-        char *password = xemu_uwp_password_vault_retrieve(
-            kVaultResource, personal_username.c_str(), &vault_error);
-        g_free(vault_error);
-        if (password != nullptr) {
-            personal_password = password;
-            SecureZeroMemory(password, strlen(password));
-            g_free(password);
-        }
-    }
-#endif
-
-    /* Downloads count against the user's own ScreenScraper account; without
-     * one, nothing is requested on the developer allowance. */
-    if (personal_username.empty() || personal_password.empty()) {
-        secure_clear(&personal_password);
-        return false;
-    }
-
-    *url = std::string(kApiEndpoint) +
-           "?devid=" + uri_escape(XEMU_SCREENSCRAPER_DEV_ID) +
-           "&devpassword=" + uri_escape(XEMU_SCREENSCRAPER_DEV_PASSWORD) +
-           "&softname=xemu&output=json&systemeid=" +
-           std::to_string(kXboxSystemId) + "&romtype=iso&serialnum=" +
-           uri_escape(serial_for_title(request.title_id));
-    if (!request.rom_filename.empty()) {
-        *url += "&romnom=" + uri_escape(request.rom_filename);
-    }
-    if (request.rom_size != 0) {
-        *url += "&romtaille=" + std::to_string(request.rom_size);
-    }
-    if (!personal_username.empty() && !personal_password.empty()) {
-        *url += "&ssid=" + uri_escape(personal_username) +
-                "&sspassword=" + uri_escape(personal_password);
-    }
-    secure_clear(&personal_password);
-    return true;
-#else
+    /* ScreenScraper needs a developer login that this fork does not have. */
     (void)request;
+    (void)settings;
     (void)url;
     return false;
-#endif
 }
 
 static void sanitize_json(json *value)
@@ -1888,6 +1855,79 @@ bool load_cached(const std::string &cache_root, const Request &request,
     return true;
 }
 
+/* "Halo - Combat Evolved (USA)" -> "Halo - Combat Evolved" */
+static std::string clean_title(const std::string &title)
+{
+    std::string out;
+    int depth = 0;
+    for (char ch : title) {
+        if (ch == '(' || ch == '[') {
+            depth++;
+        } else if (ch == ')' || ch == ']') {
+            depth = depth > 0 ? depth - 1 : 0;
+        } else if (depth == 0) {
+            out.push_back(ch);
+        }
+    }
+    while (!out.empty() && (out.back() == ' ' || out.back() == '_')) {
+        out.pop_back();
+    }
+    /* No-Intro/Redump put "The" at the end */
+    if (out.size() > 5 && out.compare(out.size() - 5, 5, ", The") == 0) {
+        out = "The " + out.substr(0, out.size() - 5);
+    }
+    return out;
+}
+
+/* Libretro thumbnail names replace these characters with '_' */
+static std::string libretro_name(std::string name)
+{
+    for (char &ch : name) {
+        if (strchr("&*/:`<>?\\|\"", ch) != nullptr) {
+            ch = '_';
+        }
+    }
+    return name;
+}
+
+static std::string json_extract_text(const std::vector<uint8_t> &body)
+{
+    try {
+        json root = json::parse(body.begin(), body.end());
+        const json &pages = root.at("query").at("pages");
+        for (const auto &[id, page] : pages.items()) {
+            (void)id;
+            std::string text = member_string(page, "extract");
+            for (char &ch : text) {
+                if (ch == '\n' || ch == '\r') {
+                    ch = ' ';
+                }
+            }
+            return text;
+        }
+    } catch (const json::exception &) {
+    }
+    return {};
+}
+
+static std::string wikipedia_synopsis(const std::string &title)
+{
+    if (title.empty()) {
+        return {};
+    }
+    std::string url =
+        "https://en.wikipedia.org/w/api.php?action=query&format=json"
+        "&generator=search&gsrlimit=1&prop=extracts&exintro=1&explaintext=1"
+        "&exchars=600&gsrsearch=" +
+        uri_escape(title + " Xbox video game");
+    std::vector<uint8_t> body;
+    int status = -1;
+    if (!download_url_to_memory(url, kMaxResponseBytes, &body, &status)) {
+        return {};
+    }
+    return json_extract_text(body);
+}
+
 static bool fetch_impl(const std::string &cache_root, const Request &request,
                        const SettingsSnapshot &settings, Metadata *metadata)
 {
@@ -1896,129 +1936,112 @@ static bool fetch_impl(const std::string &cache_root, const Request &request,
         return false;
     }
 
-    std::string api_url;
-    if (!build_api_url(request, settings, &api_url)) {
-        return false;
+    std::filesystem::path rom(request.rom_filename);
+    std::string stem = path_to_utf8(rom.stem());
+    if (stem.empty()) {
+        stem = path_to_utf8(rom.filename());
     }
-    std::vector<uint8_t> response_data;
-    int status = -1;
-    bool downloaded = download_url_to_memory(
-        api_url, kMaxResponseBytes, &response_data, &status);
-    secure_clear(&api_url);
-    if (!downloaded) {
-        /* 429/430/431 quota responses stop this serial worker. A later
-         * library refresh retries without publishing or destroying cache. */
-        return false;
+    /* Games kept as folders ("Halo (USA)/default.xbe") are named by the folder */
+    std::string lower_stem = lowercase(stem);
+    if ((lower_stem == "default" || lower_stem.empty()) && rom.has_parent_path()) {
+        stem = path_to_utf8(rom.parent_path().filename());
     }
-
-    json response;
-    try {
-        response = json::parse(response_data.begin(), response_data.end());
-    } catch (const json::exception &) {
-        return false;
-    }
-    const json *game = nullptr;
-    try {
-        game = &response.at("response").at("jeu");
-    } catch (const json::exception &) {
-        return false;
-    }
-    if (!game->is_object()) {
-        return false;
+    std::string clean = clean_title(stem);
+    if (clean.empty() || lowercase(clean) == "default") {
+        clean = clean_title(request.xbe_name);
     }
 
     Metadata result;
     result.requested_title_id = request.title_id;
     result.serial = serial;
-    auto id = game->find("id");
-    if (id != game->end()) {
-        result.game_id = scalar_text(*id);
-    }
-    auto rom_id = game->find("romid");
-    if (rom_id != game->end()) {
-        result.rom_id = scalar_text(*rom_id);
-    }
-    auto names = game->find("noms");
-    if (names != game->end()) {
-        result.name = choose_localized_text(*names);
-    }
+    result.game_id = "libretro";
+    result.name = !clean.empty() ? clean : stem;
     if (result.name.empty()) {
-        result.name = request.rom_filename;
-    }
-    if (result.game_id.empty() || result.name.empty()) {
         return false;
     }
-    result.details = parse_details(*game);
-
-    auto media_value = game->find("medias");
-    std::vector<MediaCandidate> candidates =
-        media_value != game->end() ? parse_media(*media_value)
-                                   : std::vector<MediaCandidate>{};
-
-    /* Persist a useful representation of the response, but never its media
-     * URLs or any echoed credential fields. */
-    json sanitized = response;
-    sanitize_json(&sanitized);
-    std::string sanitized_text = sanitized.dump(2);
-    if (!write_file_atomic(sanitized_response_path(cache_root, serial),
-                           sanitized_text.data(), sanitized_text.size())) {
-        return false;
+    result.details.synopsis = wikipedia_synopsis(result.name);
+    if (result.details.synopsis.empty() && !request.xbe_name.empty()) {
+        result.details.synopsis = wikipedia_synopsis(clean_title(request.xbe_name));
     }
 
-    json previous_media = load_previous_media_entries(
-        cache_root, settings.media_root, request);
+    /* Names to try, best first: the file name as is (Redump naming matches
+     * Libretro's), then the clean title with the usual regions. */
+    std::vector<std::string> names{ libretro_name(stem) };
+    for (const char *region : { "USA", "USA, Europe", "Europe", "World", "Japan" }) {
+        names.push_back(libretro_name(result.name) + " (" + region + ")");
+    }
+    names.push_back(libretro_name(result.name));
+    std::string xbe = clean_title(request.xbe_name);
+    if (!xbe.empty() && xbe != result.name) {
+        for (const char *region : { "USA", "Europe", "World" }) {
+            names.push_back(libretro_name(xbe) + " (" + region + ")");
+        }
+    }
+
+    struct Kind {
+        const char *folder;
+        const char *type;
+    };
+    /* Box art, a screenshot (also used as a background) and the title screen */
+    const Kind kinds[] = {
+        { "Named_Boxarts", "box-2D" },
+        { "Named_Snaps", "ss" },
+        { "Named_Titles", "fanart" },
+    };
+
     json downloaded_media = json::array();
     bool complete = true;
-    std::set<size_t> selected_indexes;
-    for (const auto &types : requested_media_groups(settings)) {
-        const MediaCandidate *candidate = best_candidate(candidates, types);
-        /* Absence in the provider response is a complete result. */
-        if (candidate == nullptr ||
-            !selected_indexes.insert(candidate->response_index).second) {
-            continue;
+    for (const Kind &kind : kinds) {
+        bool found = false;
+        for (const std::string &name : names) {
+            MediaCandidate media;
+            media.type = kind.type;
+            media.region = "us";
+            media.format = "png";
+            media.url = std::string("https://thumbnails.libretro.com/Microsoft%20-%20Xbox/") +
+                        kind.folder + "/" + uri_escape(name) + ".png";
+            json entry;
+            if (download_media(settings.media_root, request, media, false, &entry)) {
+                downloaded_media.push_back(std::move(entry));
+                found = true;
+                break;
+            }
         }
-        json entry;
-        if (download_media(settings.media_root, request, *candidate, false,
-                           &entry)) {
-            downloaded_media.push_back(std::move(entry));
-        } else {
+        if (!found && std::string(kind.type) == "box-2D") {
+            /* Try again on the next library refresh */
             complete = false;
         }
     }
 
-    json manifest_media = merge_media_entries(previous_media,
-                                               downloaded_media);
-
     json manifest = {
         { "version", 1 },
-        { "provider", "screenscraper" },
-        { "system_id", kXboxSystemId },
+        { "provider", "libretro" },
         { "title_id", request.title_id },
         { "serial", serial },
         { "game_id", result.game_id },
-        { "rom_id", result.rom_id },
+        { "rom_id", "" },
         { "name", result.name },
         { "details",
           {
               { "version", kDetailsVersion },
               { "synopsis", result.details.synopsis },
-              { "developer", result.details.developer },
-              { "publisher", result.details.publisher },
-              { "genre", result.details.genre },
-              { "players", result.details.players },
-              { "release_date", result.details.release_date },
-              { "rating", result.details.rating },
+              { "developer", "" },
+              { "publisher", "" },
+              { "genre", "" },
+              { "players", "" },
+              { "release_date", "" },
+              { "rating", "" },
           } },
         { "download_policy", policy_signature(settings) },
         { "download_complete", complete },
-        { "media", manifest_media },
+        { "media", downloaded_media },
     };
     std::string manifest_text = manifest.dump(2);
     if (!write_file_atomic(manifest_path(cache_root, serial),
                            manifest_text.data(), manifest_text.size())) {
         return false;
     }
-    rebuild_media_paths(settings.media_root, manifest_media, &result);
+    rebuild_media_paths(settings.media_root, downloaded_media, &result);
     *metadata = std::move(result);
     return true;
 }

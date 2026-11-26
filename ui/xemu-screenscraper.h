@@ -15,6 +15,9 @@ namespace xemu::screenscraper {
 struct Request {
     uint32_t title_id = 0;
     std::string rom_filename;
+    /* Title stored in the game's XBE ("Halo"), used when the file name does
+     * not match the artwork library. */
+    std::string xbe_name;
     uint64_t rom_size = 0;
     /* Download every selected media file again, even when a valid copy
      * already exists. */
