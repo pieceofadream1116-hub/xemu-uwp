@@ -1457,7 +1457,24 @@ public:
         bool contain = style == ss::kBackgroundMixV1 ||
                        style == ss::kBackgroundMixV2;
 
-        DrawMovingBlue(dl, display, alpha, now);
+        // The player's own picture (Settings > General), slowly drifting and
+        // darkened a little so the list stays easy to read; else the moving
+        // blue backdrop
+        const char *mine = g_config.general.screenscraper.my_background;
+        ArtTexture *picture = nullptr;
+        if (mine != nullptr && *mine) {
+            picture = RequestArt(mine, (int)display.x, (int)display.y, true,
+                                 true);
+        }
+        if (picture != nullptr) {
+            DrawDriftingImage(dl, (ImTextureID)picture->texture_id,
+                              picture->width, picture->height, display, alpha,
+                              now);
+            dl->AddRectFilled(ImVec2(0, 0), display,
+                              IM_COL32(0, 0, 0, (int)(110 * alpha)));
+        } else {
+            DrawMovingBlue(dl, display, alpha, now);
+        }
         if (style == ss::kBackgroundOff) {
             return;
         }

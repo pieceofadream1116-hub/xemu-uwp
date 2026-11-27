@@ -247,6 +247,21 @@ void MainMenuGeneralView::Draw()
             }
             xemu_game_library_screenscraper_settings_changed();
         }
+        static const SDL_DialogFileFilter picture_filters[] = {
+            { "Pictures", "jpg;jpeg;png;bmp" },
+            { "All Files", "*" }
+        };
+        FilePicker("My background picture", scraper.my_background,
+                   picture_filters, 2, false, [](const char *path) {
+                       xemu_settings_set_string(
+                           &g_config.general.screenscraper.my_background,
+                           path ? path : "");
+                   });
+        if (scraper.my_background && *scraper.my_background &&
+            ImGui::Button("Use the moving blue background")) {
+            xemu_settings_set_string(
+                &g_config.general.screenscraper.my_background, "");
+        }
 
         SectionTitle("Artwork downloads");
         bool media_changed = false;
