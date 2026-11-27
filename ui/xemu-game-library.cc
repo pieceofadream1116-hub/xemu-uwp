@@ -1267,11 +1267,16 @@ void GameLibrary::refresh_directory(const std::string &configured)
 
     if (!directory.empty() && std::filesystem::is_directory(directory, ec) &&
         !ec) {
-        std::filesystem::directory_iterator iterator(
+        /* Games may sit in a folder of their own ("Halo\\Halo.iso"), so
+         * folders up to 3 levels deep are searched too. */
+        std::filesystem::recursive_directory_iterator iterator(
             directory, std::filesystem::directory_options::skip_permission_denied,
             ec);
-        std::filesystem::directory_iterator end;
+        std::filesystem::recursive_directory_iterator end;
         while (!ec && iterator != end) {
+            if (iterator.depth() >= 3) {
+                iterator.disable_recursion_pending();
+            }
             const std::filesystem::directory_entry &file = *iterator;
             const std::filesystem::path &path = file.path();
             uint64_t size = 0;
