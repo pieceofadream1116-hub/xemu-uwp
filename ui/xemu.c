@@ -1663,6 +1663,87 @@ static void init_sdl_app_metadata(void)
 }
 
 #ifdef CONFIG_UWP
+/* Crash box: a fatal error on any thread writes where it happened to the log
+ * (flushed straight away), and the next start shows it on the TV, so nobody
+ * has to fetch the log to find out what went wrong. */
+typedef LONG (WINAPI *uwp_crash_handler_fn)(EXCEPTION_POINTERS *);
+__declspec(dllimport) PVOID WINAPI AddVectoredExceptionHandler(ULONG first, uwp_crash_handler_fn handler);
+#pragma comment(lib, "onecore.lib")
+extern IMAGE_DOS_HEADER __ImageBase;
+
+static char uwp_previous_crash[2048];
+
+static LONG WINAPI uwp_crash_catcher(EXCEPTION_POINTERS *info)
+{
+    static volatile LONG once;
+    DWORD code = info->ExceptionRecord->ExceptionCode;
+    switch (code) {
+    case EXCEPTION_ACCESS_VIOLATION:
+    case EXCEPTION_ILLEGAL_INSTRUCTION:
+    case EXCEPTION_PRIV_INSTRUCTION:
+    case EXCEPTION_INT_DIVIDE_BY_ZERO:
+    case EXCEPTION_STACK_OVERFLOW:
+    case EXCEPTION_IN_PAGE_ERROR:
+    case 0xC0000374: /* heap corruption */
+        break;
+    default:
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+    if (InterlockedExchange(&once, 1)) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+    uintptr_t where = (uintptr_t)info->ExceptionRecord->ExceptionAddress;
+    uintptr_t base = (uintptr_t)&__ImageBase;
+    const IMAGE_NT_HEADERS *nt = (const IMAGE_NT_HEADERS *)(base + __ImageBase.e_lfanew);
+    uintptr_t size = nt->OptionalHeader.SizeOfImage;
+    if (where >= base && where < base + size) {
+        fprintf(stderr, "[crash] EMU crashed: error %08lX at xemu+%llX", code,
+                (unsigned long long)(where - base));
+    } else {
+        fprintf(stderr, "[crash] EMU crashed: error %08lX outside the app (%llX)",
+                code, (unsigned long long)where);
+    }
+    if (code == EXCEPTION_ACCESS_VIOLATION &&
+        info->ExceptionRecord->NumberParameters >= 2) {
+        fprintf(stderr, ", %s %llX",
+                info->ExceptionRecord->ExceptionInformation[0] ? "writing" : "reading",
+                (unsigned long long)info->ExceptionRecord->ExceptionInformation[1]);
+    }
+    fprintf(stderr, "\n");
+    fflush(stderr);
+    fflush(stdout);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+/* The last lines of the previous run's log, when that run crashed */
+static void uwp_read_previous_crash(const char *log_path)
+{
+    FILE *f = fopen(log_path, "rb");
+    if (f == NULL) {
+        return;
+    }
+    static char tail[16384];
+    fseek(f, 0, SEEK_END);
+    long len = ftell(f);
+    long start = len > (long)sizeof(tail) - 1 ? len - (long)sizeof(tail) + 1 : 0;
+    fseek(f, start, SEEK_SET);
+    size_t n = fread(tail, 1, sizeof(tail) - 1, f);
+    fclose(f);
+    tail[n] = '\0';
+    const char *crash = strstr(tail, "[crash]");
+    if (crash == NULL) {
+        return;
+    }
+    /* The crash line, plus the lines just before it */
+    const char *from = crash;
+    for (int lines = 0; from > tail && lines < 10; from--) {
+        if (from[-1] == '\n') {
+            lines++;
+        }
+    }
+    snprintf(uwp_previous_crash, sizeof(uwp_previous_crash), "%s", from);
+}
+
 static void redirect_uwp_stdio_to_localstate(void)
 {
     const char *local_folder = SDL_GetWinRTFSPath(SDL_WINRT_PATH_LOCAL_FOLDER);
@@ -1681,7 +1762,9 @@ static void redirect_uwp_stdio_to_localstate(void)
         return;
     }
 
-    if (freopen(log_path, "a", stdout) == NULL) {
+    uwp_read_previous_crash(log_path);
+    /* Each start begins a fresh log, so it stays small and the newest run is all there is */
+    if (freopen(log_path, "w", stdout) == NULL) {
         OutputDebugStringA("xemu UWP: failed to redirect stdout to LocalState\n");
     }
     if (freopen(log_path, "a", stderr) == NULL) {
@@ -1695,6 +1778,19 @@ static void redirect_uwp_stdio_to_localstate(void)
     setvbuf(stderr, NULL, _IOFBF, 256 * 1024);
     fprintf(stderr, "xemu UWP: logging to %s\n", log_path);
     g_free(log_path);
+    AddVectoredExceptionHandler(1, uwp_crash_catcher);
+}
+
+static void uwp_show_previous_crash(void)
+{
+    if (uwp_previous_crash[0] == '\0') {
+        return;
+    }
+    char text[2304];
+    snprintf(text, sizeof(text),
+             "EMU closed by itself last time. Take a photo of this for Claude.\n\n%s",
+             uwp_previous_crash);
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, "EMU: what went wrong last time", text, NULL);
 }
 #endif
 
@@ -1730,6 +1826,9 @@ int xemu_main(int argc, char **argv)
     redirect_uwp_stdio_to_localstate();
 #endif
 
+#if defined(CONFIG_UWP)
+    uwp_show_previous_crash();
+#endif
     fprintf(stderr, "xemu_version: %s\n", xemu_version);
     fprintf(stderr, "xemu_commit: %s\n", xemu_commit);
     fprintf(stderr, "xemu_date: %s\n", xemu_date);
